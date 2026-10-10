@@ -9,9 +9,43 @@ exit /b
 #PS#
 Add-Type -AssemblyName System.Windows.Forms,System.Drawing
 try{
+$FX_VERSION='2026.10.09.1'
+$FX_UPDATE_URL='https://raw.githubusercontent.com/haraldrichter12-hub/fx-tweaks/main/FX_Tweaks.bat'
 [Windows.Forms.Application]::EnableVisualStyles()
 Remove-TypeData System.Array -ErrorAction SilentlyContinue
 try{ [Windows.Forms.Application]::SetUnhandledExceptionMode('CatchException') }catch{}
+function Get-RemoteVersion($text){ if($text -match "\`$FX_VERSION='([0-9.]+)'"){ $Matches[1] }else{ '' } }
+function Ver-Num($v){ $p=($v -split '\.'); $n=0L; foreach($x in $p){ $n=$n*100000+[int64]$x }; $n }
+function Check-Update{
+  if(-not $bat){ return }
+  if((Get-ItemProperty 'HKCU:\Software\FXTweaks' -Name NoAutoUpdate -ErrorAction SilentlyContinue).NoAutoUpdate -eq 1){ return }
+  try{
+    [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12
+    $wc=New-Object Net.WebClient; $wc.Headers.Add('Cache-Control','no-cache'); $wc.Headers.Add('User-Agent','FXTweaks')
+    $remote=$wc.DownloadString($FX_UPDATE_URL + '?t=' + [DateTime]::UtcNow.Ticks)
+    $rv=Get-RemoteVersion $remote
+    if($rv -and (Ver-Num $rv) -gt (Ver-Num $FX_VERSION)){
+      $cur=[IO.File]::ReadAllText($bat)
+      if($remote -ne $cur -and $remote -match '#'+'PS#'){
+        $tmp="$bat.new"; [IO.File]::WriteAllText($tmp,$remote,(New-Object Text.UTF8Encoding($false)))
+        # swap files and relaunch via a tiny helper, then exit this instance
+        $vbs=Join-Path $env:TEMP 'fx_update.vbs'
+        $q=[char]34
+        $lines=@(
+          'WScript.Sleep 1200',
+          'Set fso=CreateObject("Scripting.FileSystemObject")',
+          'On Error Resume Next',
+          'fso.DeleteFile ' + $q + $bat + $q + ', True',
+          'fso.MoveFile ' + $q + $tmp + $q + ', ' + $q + $bat + $q,
+          'Set sh=CreateObject("WScript.Shell")',
+          'sh.Run ' + $q + $q + $q + $bat + $q + $q + $q + ', 0, False' )
+        [IO.File]::WriteAllLines($vbs,$lines,(New-Object Text.ASCIIEncoding))
+        Start-Process 'wscript.exe' -ArgumentList ("$q$vbs$q")
+        $script:updating=$true } }
+  }catch{}
+}
+try{ Check-Update }catch{}
+if($script:updating){ return }
 [Windows.Forms.Application]::add_ThreadException({ param($s,$e)
   try{ "$(Get-Date) $($e.Exception.Message)" | Out-File (Join-Path $env:TEMP 'FXTweaks_error.txt') -Append
     if(-not $script:errShown){ $script:errShown=$true; Log "Something went wrong: $($e.Exception.Message)" $bad } }catch{} })
@@ -311,6 +345,7 @@ $logo=New-Object Windows.Forms.PictureBox; $logo.Location=New-Object Drawing.Poi
 $logo.Image=New-FXBitmap (Px 72); $logo.SizeMode='Zoom'; $side.Controls.Add($logo)
 [void](Lbl 'FX Tweaks' 64 19 13 $tx $true $side)
 $userLbl=Lbl 'Guest' 66 43 8.5 $ac $false $side
+$verLbl=Lbl "v$FX_VERSION" 12 636 8 $mu $false $side
 
 $stBar=Pnl $f 210 626 790 34 $bg
 [void](Pnl $stBar 0 0 790 1 $bd)
@@ -1448,6 +1483,11 @@ $stClean=StatCard 587 'Space cleaned'
 [void](Lbl 'History' 27 322 11 $tx $true $pgAcct)
 $lvHist=New-List $pgAcct 28 350 734 210 @(@('When',160),@('What',200),@('Result',0)) $false
 $acDel=Btn 'Delete account' 612 574 150 34 { Delete-Account } 'secondary' $pgAcct
+[void](Btn 'Check for updates' 28 574 170 34 {
+  Log 'Checking GitHub for a newer version...'
+  $script:updating=$false; Check-Update
+  if($script:updating){ Log 'Update found. FX Tweaks will restart in a moment...' $ac; Start-Sleep -Milliseconds 400; $f.Close() }
+  else{ Log "You already have the newest version (v$FX_VERSION)." $ac } } 'secondary' $pgAcct)
 
 function Refresh-Account{
   $u=$script:user
@@ -1733,8 +1773,8 @@ function New-Shortcut{
       $l.TargetPath=$bat; $l.WorkingDirectory=Split-Path $bat; $l.IconLocation="$ico,0"; $l.WindowStyle=7; $l.Description='FX Tweaks'; $l.Save() }
     Log 'FX shortcut added to your desktop and Start menu.' $ac }
   catch{ Log "Couldn't create the shortcut: $($_.Exception.Message)" $bad } }
-$fnLbl=Lbl 'Fortnite: checking...' 18 572 9 $mu $false $side
-$shortcutBtn=Btn 'Add desktop shortcut' 12 604 186 36 { New-Shortcut } 'secondary' $side
+$fnLbl=Lbl 'Fortnite: checking...' 18 574 9 $mu $false $side
+$shortcutBtn=Btn 'Add desktop shortcut' 12 600 186 34 { New-Shortcut } 'secondary' $side
 
 $fnTimer=New-Object Windows.Forms.Timer; $fnTimer.Interval=3000
 $fnTimer.Add_Tick({ try{
